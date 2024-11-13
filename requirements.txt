@@ -1,6 +1,6 @@
 keras==2.15.0
 matplotlib==3.9.2
-numpy==2.1.3
+numpy==1.21.6   # Downgrade to a version compatible with Python 3.9
 pandas==2.2.3
 plotly==5.24.1
 prophet==1.1.6
@@ -10,3 +10,4 @@ statsmodels==0.14.1
 streamlit==1.39.0
 xgboost==2.1.2
 yfinance==0.2.37
+
