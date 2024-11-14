@@ -10,9 +10,6 @@ import plotly.express as px
 import datetime
 from datetime import date, timedelta
 from statsmodels.tsa.seasonal import seasonal_decompose
-import xgboost as xgb
-from sklearn.metrics import mean_squared_error
-from statsmodels.tsa.arima.model import ARIMA
 import statsmodels.api as sm
 from statsmodels.tsa.stattools import adfuller
 from prophet import Prophet
@@ -21,10 +18,12 @@ from sklearn.metrics import mean_squared_error
 from keras.models import Sequential
 from keras.layers import LSTM, Dense
 from sklearn.preprocessing import MinMaxScaler
+import xgboost as xgb
+from sklearn.model_selection import train_test_split
+from catboost import CatBoostRegressor
 
 # setting the side bar to collapsed taa k footer jo ha wo sahi dikhay
 st.set_page_config(layout="wide", initial_sidebar_state="collapsed")
-
 
 # Title
 app_name = 'Stock Market Forecasting App'
@@ -78,22 +77,25 @@ st.write(decomposition.plot())
 # Make same plot in Plotly
 st.write("## Plotting the decomposition in Plotly")
 st.plotly_chart(px.line(x=data["Date"], y=decomposition.trend, title='Trend', width=1000, height=400, labels={'x': 'Date', 'y': 'Price'}).update_traces(line_color='Blue'))
-st.plotly_chart(px.line(x=data["Date"], y=decomposition.seasonal, title='Seasonality', width=1000, height=400,
-labels={'x': 'Date', 'y': 'Price'}).update_traces(line_color='green'))
-st.plotly_chart(px.line(x=data["Date"], y=decomposition.resid, title='Residuals', width=1000, height=400,
-labels={'x': 'Date', 'y': 'Price'}).update_traces(line_color='Red', line_dash='dot'))
+st.plotly_chart(px.line(x=data["Date"], y=decomposition.seasonal, title='Seasonality', width=1000, height=400, labels={'x': 'Date', 'y': 'Price'}).update_traces(line_color='green'))
+st.plotly_chart(px.line(x=data["Date"], y=decomposition.resid, title='Residuals', width=1000, height=400, labels={'x': 'Date', 'y': 'Price'}).update_traces(line_color='Red', line_dash='dot'))
 
 # Model selection
-models = ['SARIMA', 'Random Forest', 'LSTM', 'Prophet', 'XGBoost', 'ARIMA']
+models = ['SARIMA', 'ARIMA', 'Random Forest', 'LSTM', 'Prophet', 'XGBoost', 'CatBoost']
 selected_model = st.sidebar.selectbox('Select the model for forecasting', models)
 
+# SARIMA Model
 if selected_model == 'SARIMA':
-    # SARIMA Model
     # User input for SARIMA parameters
     p = st.slider('Select the value of p', 0, 5, 2)
     d = st.slider('Select the value of d', 0, 5, 1)
     q = st.slider('Select the value of q', 0, 5, 2)
-    seasonal_order = st.number_input('Select the value of seasonal p', 0, 24, 12)
+
+    # Dynamically set the seasonal period based on the data frequency (252 trading days for daily data)
+    freq = pd.infer_freq(data['Date'])
+    seasonal_period = 252 if freq == 'D' else 12
+
+    seasonal_order = st.slider('Select the value of seasonal p', 0, 24, seasonal_period)
 
     model = sm.tsa.statespace.SARIMAX(data[column], order=(p, d, q), seasonal_order=(p, d, q, seasonal_order))
     model = model.fit()
@@ -133,9 +135,44 @@ if selected_model == 'SARIMA':
     # Display the plot
     st.plotly_chart(fig)
 
+# ARIMA Model
+elif selected_model == 'ARIMA':
+    # ARIMA Model
+    st.header('AutoRegressive Integrated Moving Average (ARIMA)')
 
+    # User input for ARIMA parameters
+    p = st.slider('Select the value of p', 0, 5, 1)
+    d = st.slider('Select the value of d', 0, 5, 1)
+    q = st.slider('Select the value of q', 0, 5, 1)
+
+    # Fit the ARIMA model
+    model = sm.tsa.ARIMA(data[column], order=(p, d, q))
+    model = model.fit()
+
+    # Print model summary
+    st.write(model.summary())
+
+    # Forecasting the future values
+    forecast_period = st.number_input('Select the number of days to forecast', 1, 365, 10)
+    forecast = model.forecast(steps=forecast_period)
+    forecast_dates = pd.date_range(start=end_date, periods=forecast_period, freq='D')
+
+    # Create a DataFrame with the forecast data
+    forecast_df = pd.DataFrame(forecast, columns=[column])
+    forecast_df.insert(0, "Date", forecast_dates)
+
+    st.write("Forecast with ARIMA:")
+    st.write(forecast_df)
+
+    # Plot the data
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=data["Date"], y=data[column], mode='lines', name='Actual', line=dict(color='blue')))
+    fig.add_trace(go.Scatter(x=forecast_df["Date"], y=forecast_df[column], mode='lines', name='Predicted', line=dict(color='red')))
+    fig.update_layout(title='Actual vs Predicted (ARIMA)', xaxis_title='Date', yaxis_title='Price', width=1000, height=400)
+    st.plotly_chart(fig)
+
+# Random Forest Model
 elif selected_model == 'Random Forest':
-    # Random Forest Model
     st.header('Random Forest Regression')
 
     # Splitting data into training and testing sets
@@ -146,191 +183,141 @@ elif selected_model == 'Random Forest':
     train_X, train_y = train_data['Date'], train_data[column]
     test_X, test_y = test_data['Date'], test_data[column]
 
-    # Initialize and fit the Random Forest model
-    rf_model = RandomForestRegressor(n_estimators=100, random_state=0)
-    rf_model.fit(train_X.values.reshape(-1, 1), train_y.values)
+    # Initialize RandomForestRegressor
+    rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+    rf_model.fit(train_X, train_y)
 
-    # Predict the future values
-    predictions = rf_model.predict(test_X.values.reshape(-1, 1))
-
-    # Calculate mean squared error
-    mse = mean_squared_error(test_y, predictions)
-    rmse = np.sqrt(mse)
-
-    st.write(f"Root Mean Squared Error (RMSE): {rmse}")
-
-    # Combine training and testing data for plotting
-    combined_data = pd.concat([train_data, test_data])
+    # Forecast the future
+    rf_predictions = rf_model.predict(test_X)
 
     # Plot the data
+    st.write("Random Forest Model Forecast")
+    st.write(rf_predictions)
+
+    # Plot results
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=combined_data["Date"], y=combined_data[column], mode='lines', name='Actual',
-                             line=dict(color='blue')))
-    fig.add_trace(go.Scatter(x=test_data["Date"], y=predictions, mode='lines', name='Predicted',
-                             line=dict(color='red')))
-    fig.update_layout(title='Actual vs Predicted (Random Forest)', xaxis_title='Date', yaxis_title='Price',
-                      width=1000, height=400)
+    fig.add_trace(go.Scatter(x=train_data["Date"], y=train_data[column], mode='lines', name='Train Data'))
+    fig.add_trace(go.Scatter(x=test_data["Date"], y=rf_predictions, mode='lines', name='Predictions'))
     st.plotly_chart(fig)
 
+# LSTM Model
 elif selected_model == 'LSTM':
-    # LSTM Model
-    st.header('Long Short-Term Memory (LSTM)')
-
-    # Scale the data
+    st.header('LSTM Neural Network')
+    # Scaling the data
     scaler = MinMaxScaler(feature_range=(0, 1))
-    scaled_data = scaler.fit_transform(data[column].values.reshape(-1, 1))
+    data_scaled = scaler.fit_transform(data[column].values.reshape(-1, 1))
 
-    # Split the data into training and testing sets
-    train_size = int(len(scaled_data) * 0.8)
-    train_data, test_data = scaled_data[:train_size], scaled_data[train_size:]
+    # Prepare training and testing data
+    train_size = int(len(data) * 0.8)
+    train_data, test_data = data_scaled[:train_size], data_scaled[train_size:]
 
-    # Create sequences for LSTM model
-    def create_sequences(dataset, seq_length):
-        X, y = [], []
-        for i in range(len(dataset) - seq_length):
-            X.append(dataset[i:i + seq_length, 0])
-            y.append(dataset[i + seq_length, 0])
-        return np.array(X), np.array(y)
+    # Create LSTM model
+    model = Sequential()
+    model.add(LSTM(50, return_sequences=True, input_shape=(train_data.shape[1], 1)))
+    model.add(LSTM(50, return_sequences=False))
+    model.add(Dense(1))
+    model.compile(optimizer='adam', loss='mean_squared_error')
 
-    seq_length = st.slider('Select the sequence length', 1, 30, 10)
+    # Train the model
+    model.fit(train_data, epochs=10, batch_size=32)
 
-    train_X, train_y = create_sequences(train_data, seq_length)
-    test_X, test_y = create_sequences(test_data, seq_length)
+    # Make predictions
+    predictions = model.predict(test_data)
+    st.write(predictions)
 
-    train_X = np.reshape(train_X, (train_X.shape[0], train_X.shape[1], 1))
-    test_X = np.reshape(test_X, (test_X.shape[0], test_X.shape[1], 1))
-
-    # Build the LSTM model
-    lstm_model = Sequential()
-    lstm_model.add(LSTM(units=50, return_sequences=True, input_shape=(train_X.shape[1], 1)))
-    lstm_model.add(LSTM(units=50))
-    lstm_model.add(Dense(units=1))
-
-    lstm_model.compile(optimizer='adam', loss='mean_squared_error')
-    lstm_model.fit(train_X, train_y, epochs=10, batch_size=16)
-
-    # Predict the future values
-    train_predictions = lstm_model.predict(train_X)
-    test_predictions = lstm_model.predict(test_X)
-    train_predictions = scaler.inverse_transform(train_predictions)
-    test_predictions = scaler.inverse_transform(test_predictions)
-
-    # Calculate mean squared error
-    train_mse = mean_squared_error(train_data[seq_length:], train_predictions)
-    train_rmse = np.sqrt(train_mse)
-    test_mse = mean_squared_error(test_data[seq_length:], test_predictions)
-    test_rmse = np.sqrt(test_mse)
-
-    st.write(f"Train RMSE: {train_rmse}")
-    st.write(f"Test RMSE: {test_rmse}")
-
-    # Combine training and testing data for plotting
-    train_dates = data['Date'][:train_size + seq_length]
-    test_dates = data['Date'][train_size + seq_length:]
-    combined_dates = pd.concat([train_dates, test_dates])
-    combined_predictions = np.concatenate([train_predictions, test_predictions])
-
-    # Plot the data
+    # Plot results
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=combined_dates, y=data[column], mode='lines', name='Actual', line=dict(color='blue')))
-    fig.add_trace(go.Scatter(x=test_dates, y=combined_predictions, mode='lines', name='Predicted',
-                             line=dict(color='red')))
-    fig.update_layout(title='Actual vs Predicted (LSTM)', xaxis_title='Date', yaxis_title='Price',
-                      width=1000, height=400)
+    fig.add_trace(go.Scatter(x=data["Date"], y=data[column], mode='lines', name='Actual'))
+    fig.add_trace(go.Scatter(x=data["Date"], y=predictions, mode='lines', name='Predictions'))
     st.plotly_chart(fig)
 
+# Prophet Model
 elif selected_model == 'Prophet':
-    # Prophet Model
-    st.header('Facebook Prophet')
+    st.header('Facebook Prophet Model')
+    prophet_data = data.rename(columns={'Date': 'ds', column: 'y'})
+    model = Prophet()
+    model.fit(prophet_data)
 
-    # Prepare the data for Prophet
-    prophet_data = data[['Date', column]]
-    prophet_data = prophet_data.rename(columns={'Date': 'ds', column: 'y'})
-
-    # Create and fit the Prophet model
-    prophet_model = Prophet()
-    prophet_model.fit(prophet_data)
-
-    # Forecast the future values
-    future = prophet_model.make_future_dataframe(periods=365)
-    forecast = prophet_model.predict(future)
+    # Forecasting
+    future = model.make_future_dataframe(prophet_data, periods=365)
+    forecast = model.predict(future)
 
     # Plot the forecast
-    fig = prophet_model.plot(forecast)
-    plt.title('Forecast with Facebook Prophet')
-    plt.xlabel('Date')
-    plt.ylabel('Price')
-    st.pyplot(fig)
+    fig = model.plot(forecast)
+    st.plotly_chart(fig)
 
+# XGBoost Model
 elif selected_model == 'XGBoost':
-    st.header('XGBoost Regression Model')
+    st.header('XGBoost Model')
 
-    # Prepare data for XGBoost
-    # Convert 'Date' to integer for feature engineering
-    data['Date_int'] = (data['Date'] - data['Date'].min()).dt.days
+    # Feature engineering for XGBoost
+    data['Year'] = data['Date'].dt.year
+    data['Month'] = data['Date'].dt.month
+    data['Day'] = data['Date'].dt.day
 
-    # Splitting data into training and testing sets
+    # Adding cyclical features
+    data['Month_sin'] = np.sin(2 * np.pi * data['Month'] / 12)
+    data['Month_cos'] = np.cos(2 * np.pi * data['Month'] / 12)
+    data['Day_sin'] = np.sin(2 * np.pi * data['Day'] / 31)
+    data['Day_cos'] = np.cos(2 * np.pi * data['Day'] / 31)
+
+    # Prepare training data
     train_size = int(len(data) * 0.8)
     train_data, test_data = data[:train_size], data[train_size:]
 
-    train_X, train_y = train_data[['Date_int']], train_data[column]
-    test_X, test_y = test_data[['Date_int']], test_data[column]
+    X_train = train_data[['Year', 'Month', 'Day', 'Month_sin', 'Month_cos', 'Day_sin', 'Day_cos']]
+    y_train = train_data[column]
+    X_test = test_data[['Year', 'Month', 'Day', 'Month_sin', 'Month_cos', 'Day_sin', 'Day_cos']]
+    y_test = test_data[column]
 
-    # Initialize and fit the XGBoost model
-    xg_model = xgb.XGBRegressor(n_estimators=100, random_state=42)
-    xg_model.fit(train_X, train_y)
+    # Initialize XGBoost model
+    model = xgb.XGBRegressor(objective="reg:squarederror", n_estimators=1000)
+    model.fit(X_train, y_train)
 
-    # Predict the future values
-    predictions = xg_model.predict(test_X)
+    # Make predictions
+    predictions = model.predict(X_test)
+    st.write(predictions)
 
-    # Calculate mean squared error
-    mse = mean_squared_error(test_y, predictions)
-    rmse = np.sqrt(mse)
-    st.write(f"Root Mean Squared Error (RMSE): {rmse}")
-
-    # Combine training and testing data for plotting
-    combined_data = pd.concat([train_data, test_data])
-
-    # Plot the data
+    # Plot the results
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=combined_data["Date"], y=combined_data[column], mode='lines', name='Actual',
-                             line=dict(color='blue')))
-    fig.add_trace(go.Scatter(x=test_data["Date"], y=predictions, mode='lines', name='Predicted',
-                             line=dict(color='red')))
-    fig.update_layout(title='Actual vs Predicted (XGBoost)', xaxis_title='Date', yaxis_title='Price',
-                      width=1000, height=400)
+    fig.add_trace(go.Scatter(x=test_data['Date'], y=y_test, mode='lines', name='True Data'))
+    fig.add_trace(go.Scatter(x=test_data['Date'], y=predictions, mode='lines', name='Predictions'))
     st.plotly_chart(fig)
 
-elif selected_model == 'ARIMA':
-    st.header('ARIMA Model')
+# CatBoost Model
+elif selected_model == 'CatBoost':
+    st.header('CatBoost Model')
 
-    # User input for ARIMA parameters
-    p = st.slider('Select the value of p', 0, 5, 1)
-    d = st.slider('Select the value of d', 0, 5, 1)
-    q = st.slider('Select the value of q', 0, 5, 1)
+    # Feature engineering for CatBoost
+    data['Year'] = data['Date'].dt.year
+    data['Month'] = data['Date'].dt.month
+    data['Day'] = data['Date'].dt.day
 
-    # ARIMA Model
-    arima_model = ARIMA(data[column], order=(p, d, q))
-    arima_model_fit = arima_model.fit()
+    # Adding cyclical features
+    data['Month_sin'] = np.sin(2 * np.pi * data['Month'] / 12)
+    data['Month_cos'] = np.cos(2 * np.pi * data['Month'] / 12)
+    data['Day_sin'] = np.sin(2 * np.pi * data['Day'] / 31)
+    data['Day_cos'] = np.cos(2 * np.pi * data['Day'] / 31)
 
-    # Print model summary
-    st.write(arima_model_fit.summary())
+    # Prepare training data
+    train_size = int(len(data) * 0.8)
+    train_data, test_data = data[:train_size], data[train_size:]
 
-    # Forecasting with ARIMA
-    forecast_period = st.number_input('Select the number of days to forecast', 1, 365, 10)
-    forecast = arima_model_fit.forecast(steps=forecast_period)
+    X_train = train_data[['Year', 'Month', 'Day', 'Month_sin', 'Month_cos', 'Day_sin', 'Day_cos']]
+    y_train = train_data[column]
+    X_test = test_data[['Year', 'Month', 'Day', 'Month_sin', 'Month_cos', 'Day_sin', 'Day_cos']]
+    y_test = test_data[column]
 
-    # Prepare the forecast dataframe
-    forecast_dates = pd.date_range(start=end_date, periods=forecast_period, freq='D')
-    forecast_df = pd.DataFrame(forecast, index=forecast_dates, columns=[column])
+    # Initialize CatBoost model
+    model = CatBoostRegressor(iterations=1000, learning_rate=0.1, depth=6, loss_function='RMSE')
+    model.fit(X_train, y_train)
 
-    st.write("Forecasted Data:", forecast_df)
+    # Make predictions
+    predictions = model.predict(X_test)
+    st.write(predictions)
 
-    # Plot the data
+    # Plot the results
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=data["Date"], y=data[column], mode='lines', name='Actual', line=dict(color='blue')))
-    fig.add_trace(go.Scatter(x=forecast_df.index, y=forecast_df[column], mode='lines', name='Predicted', line=dict(color='red')))
-    fig.update_layout(title='Actual vs Predicted (ARIMA)', xaxis_title='Date', yaxis_title='Price', width=1000, height=400)
+    fig.add_trace(go.Scatter(x=test_data['Date'], y=y_test, mode='lines', name='True Data'))
+    fig.add_trace(go.Scatter(x=test_data['Date'], y=predictions, mode='lines', name='Predictions'))
     st.plotly_chart(fig)
-
-st.write("Model selected:", selected_model)
