@@ -5,8 +5,8 @@ matplotlib
 numpy
 pandas
 plotly
-fbprophet
-pystan
+prophet
+cmdstanpy
 scikit_learn
 seaborn
 statsmodels
