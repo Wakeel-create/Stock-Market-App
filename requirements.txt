@@ -12,7 +12,7 @@ streamlit==1.42.2
 xgboost==2.1.4
 yfinance==0.2.54
 cmdstanpy==1.2.0  # Required for Prophet
-tensorflow==2.15.0  # Fix Keras error
+tensorflow==2.15.0
 rich==13.9.4
 pygments==2.19.1
 markdown-it-py==3.0.0
