@@ -11,3 +11,7 @@ statsmodels==0.14.4
 streamlit==1.42.2
 xgboost==2.1.4
 yfinance==0.2.54
+streamlit>=1.32.2
+tensorflow==2.16.1  # Critical: Python 3.12 compatibility
+numpy==1.26.4  # Match TensorFlow's requirement
+protobuf==3.20.3  # Avoid version conflicts
